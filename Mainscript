@@ -1,0 +1,207 @@
+-- true = everyone is admin, false = only listed admins
+local EveryoneIsAdmin = false  -- Set to true to make everyone an admin, false to use the list
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local DataStoreService = game:GetService("DataStoreService")
+local MessagingService = game:GetService("MessagingService")
+
+local AnnouncementChannel = "GlobalAnnouncements"
+local INFINITE_CASH_VALUE = 9e18  -- Set a huge value for infinite cash
+
+local BansDataStore = DataStoreService:GetDataStore("BansDataStore")
+
+-- List of admins, if EveryoneIsAdmin is false, only these players are admins
+local ADMINS = {
+	["Gamerzfamz"] = true,
+	["TRAPYXCHAT31"] = true,
+	["LucaDaBoy"] = true,
+}
+
+-- Command prefixes
+local COMMAND_PREFIX_CASH = "-cash"
+local COMMAND_PREFIX_KICK = "-kick"
+local COMMAND_PREFIX_BAN = "-ban"
+local COMMAND_PREFIX_UNBAN = "-unban"
+local COMMAND_PREFIX_ANNOUNCEMENT = "-announcement"
+local COMMAND_PREFIX_FLING = "-fling"  -- Fling command
+
+local AnnouncementEvent = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("AnnouncementEvent")
+
+-- Function to get player by name
+local function getTargetPlayer(name)
+	for _, p in pairs(Players:GetPlayers()) do
+		if p.Name:lower() == name:lower() then
+			return p
+		end
+	end
+end
+
+-- Function to get the player's cash stat
+local function getCashStat(player)
+	local stats = player:FindFirstChild("leaderstats")
+	return stats and stats:FindFirstChild("Cash")
+end
+
+-- Function to check if a player is banned
+local function checkBan(player)
+	local success, data = pcall(function()
+		return BansDataStore:GetAsync(player.UserId)
+	end)
+	if success and data then
+		if data.banTime == 0 or tick() < data.banTime then
+			player:Kick(data.banReason)
+		end
+	end
+end
+
+-- Handle the cash command
+local function handleCashCommand(sender, args)
+	if not EveryoneIsAdmin and not ADMINS[sender.Name] then return end  -- Check if sender is an admin
+
+	local target, amountStr
+	if #args == 2 then
+		target = sender  -- If no target, use the sender
+		amountStr = args[2]
+	elseif #args >= 3 then
+		target = getTargetPlayer(args[2])  -- Get target player from the arguments
+		amountStr = args[3]
+	else
+		return
+	end
+
+	if not target then return end
+	local stat = getCashStat(target)
+	if not stat then return end
+
+	if amountStr:lower() == "inf" then
+		stat.Value = INFINITE_CASH_VALUE  -- Set infinite cash if specified
+	else
+		local amount = tonumber(amountStr)
+		if amount then
+			stat.Value += amount  -- Add specified cash amount
+		end
+	end
+end
+
+-- Handle the kick command
+local function handleKickCommand(sender, args)
+	if not EveryoneIsAdmin and not ADMINS[sender.Name] then return end
+
+	local target = getTargetPlayer(args[2])
+	if not target then return end
+	local reason = table.concat(args, " ", 3)
+	target:Kick(reason ~= "" and reason or "Kicked by admin.")  -- Kick the player with the reason
+end
+
+-- Handle the ban command
+local function handleBanCommand(sender, args)
+	if not EveryoneIsAdmin and not ADMINS[sender.Name] then return end
+
+	local target = getTargetPlayer(args[2])
+	if not target then return end
+
+	local duration = args[3]
+	local reason = table.concat(args, " ", 4)
+
+	local banData = {
+		banTime = duration:lower() == "perm" and 0 or tick() + tonumber(duration) * 60,  -- Permanent ban if "perm"
+		banReason = reason ~= "" and reason or "No reason provided"
+	}
+
+	local success = pcall(function()
+		BansDataStore:SetAsync(target.UserId, banData)  -- Store ban info in DataStore
+	end)
+	if success then
+		target:Kick(banData.banReason)  -- Kick the player with the ban reason
+	end
+end
+
+-- Handle the unban command
+local function handleUnbanCommand(sender, args)
+	if not EveryoneIsAdmin and not ADMINS[sender.Name] then return end
+
+	local target = getTargetPlayer(args[2])
+	if not target then return end
+
+	pcall(function()
+		BansDataStore:RemoveAsync(target.UserId)  -- Remove ban data from DataStore
+	end)
+end
+
+-- Handle the announcement command
+local function handleAnnouncementCommand(sender, args)
+	if not EveryoneIsAdmin and not ADMINS[sender.Name] then return end
+
+	if #args < 3 then return end
+	local message = table.concat(args, " ", 2)  -- Get the message from the arguments
+
+	-- Send global announcement
+	MessagingService:PublishAsync(AnnouncementChannel, message)  -- Publish global announcement
+end
+
+-- Handle the fling command
+local function handleFlingCommand(sender, args)
+	if not EveryoneIsAdmin and not ADMINS[sender.Name] then return end
+
+	if #args < 2 then return end
+	local target = getTargetPlayer(args[2])
+	if not target then return end
+
+	local character = target.Character
+	if not character then return end
+
+	local hrp = character:FindFirstChild("HumanoidRootPart")
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+
+	if hrp then
+		-- Apply fling force to the player
+		local force = Instance.new("BodyVelocity")
+		force.Velocity = Vector3.new(0, 200000, 0) + Vector3.new(math.random(-10000, 10000), 0, math.random(-10000, 10000))  -- Random fling direction
+		force.MaxForce = Vector3.new(1e5, 1e5, 1e5)  -- Max force for fling
+		force.P = 1e5  -- Apply force to the body
+		force.Parent = hrp
+
+		-- Clean up the force after 1.5 sec
+		game.Debris:AddItem(force, 1.5)
+	end
+
+	-- Kill after 25 sec if the player is still alive
+	task.delay(25, function()
+		if target and target.Character and humanoid and humanoid.Health > 0 then
+			humanoid.Health = 0  -- Kill the player if they're alive
+		end
+	end)
+end
+
+-- Listen for players joining and their commands
+Players.PlayerAdded:Connect(function(player)
+	checkBan(player)
+
+	player.Chatted:Connect(function(message)
+		local args = string.split(message, " ")
+		local command = args[1]:lower()
+
+		-- Check which command is being used
+		if command == COMMAND_PREFIX_CASH then
+			handleCashCommand(player, args)
+		elseif command == COMMAND_PREFIX_KICK then
+			handleKickCommand(player, args)
+		elseif command == COMMAND_PREFIX_BAN then
+			handleBanCommand(player, args)
+		elseif command == COMMAND_PREFIX_UNBAN then
+			handleUnbanCommand(player, args)
+		elseif command == COMMAND_PREFIX_ANNOUNCEMENT then
+			handleAnnouncementCommand(player, args)
+		elseif command == COMMAND_PREFIX_FLING then
+			handleFlingCommand(player, args)
+		end
+	end)
+end)
+
+-- Listen for global announcements
+MessagingService:SubscribeAsync(AnnouncementChannel, function(data)
+	for _, player in pairs(Players:GetPlayers()) do
+		AnnouncementEvent:FireClient(player, data.Data)
+	end
+end)
