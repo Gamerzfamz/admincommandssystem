@@ -1,0 +1,8 @@
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TextChatService = game:GetService("TextChatService")
+
+ReplicatedStorage.Remotes:WaitForChild("AnnouncementEvent").OnClientEvent:Connect(function(message)
+	if TextChatService:FindFirstChild("TextChannels") and TextChatService.TextChannels:FindFirstChild("RBXSystem") then
+		TextChatService.TextChannels.RBXSystem:DisplaySystemMessage("[ANNOUNCEMENT] " .. message)
+	end
+end)
